@@ -50,8 +50,10 @@ final class NotchModel: ObservableObject {
 
     @Published var topic: ChatTopic = .needsYou { didSet { if topic != oldValue { showAll = false } } }
     @Published var showAll = false   // "See more" expanded
-    @Published var petFPS = 15       // the 3D pet's frame rate: lower in the notch, full in the panel
-    @Published var petPaused = false // screen off, locked, or nothing for a long while
+    @Published var petFPS = 30       // the live 3D pet (panel only)
+    @Published var petPaused = false // screen off or locked
+    @Published var earFrame: PetFrame = .normal  // the still pet in the notch: normal, mid-blink, mid-hop
+    @Published var petImagesVersion = 0          // bumped when a still picture finishes rendering
 
     var onContentSize: ((CGSize) -> Void)?
     var onPet: (() -> Void)?
@@ -165,7 +167,8 @@ struct NotchView: View {
             HStack(spacing: 0) {
                 ZStack {
                     if model.mode == .resting || model.mode == .switcher {
-                        pet(detailed: false)
+                        // A still picture in the notch (free); the live 3D pet only runs in the open panel.
+                        StaticPetView(model: model)
                             .frame(width: model.earWidth - 2, height: model.notchHeight - 2)
                             .matchedGeometryEffect(id: "pet", in: ns)
                     }

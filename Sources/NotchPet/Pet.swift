@@ -521,6 +521,107 @@ private struct PetEmotes: View {
     }
 }
 
+// MARK: Still images for the notch
+
+/// Which still picture the notch shows: the pet as it normally looks, mid-blink, or mid-hop.
+enum PetFrame: String, Sendable {
+    case normal, blink, hop
+}
+
+/// The pet sitting in the notch is a still picture of the 3D pet, rendered once per look and cached,
+/// so it costs nothing while it sits there. Only the open panel runs the live 3D pet.
+final class PetImageCache: @unchecked Sendable {
+    static let shared = PetImageCache()
+
+    private let queue = DispatchQueue(label: "notchpet.petimages", qos: .utility)
+    private let lock = NSLock()
+    private var images: [String: NSImage] = [:]
+    private var pending = Set<String>()
+
+    /// The cached picture for this look, or nil while it renders in the background (then `ready` runs on main).
+    func image(for state: PetState, frame: PetFrame, ready: @escaping @Sendable () -> Void) -> NSImage? {
+        let key = Self.key(state, frame)
+        lock.lock()
+        defer { lock.unlock() }
+        if let image = images[key] { return image }
+        if pending.insert(key).inserted {
+            queue.async { [self] in
+                let image = Self.render(state, frame)
+                lock.lock()
+                images[key] = image
+                pending.remove(key)
+                lock.unlock()
+                DispatchQueue.main.async { ready() }
+            }
+        }
+        return nil
+    }
+
+    /// Render every look for a skin ahead of time, so mood changes never wait on a render.
+    func prewarm(skin: Skin) {
+        for mood in [Mood.idle, .working, .finished, .needsYou, .sleeping] {
+            for frame in [PetFrame.normal, .blink, .hop] {
+                _ = image(for: PetState(skin: skin, mood: mood), frame: frame, ready: {})
+            }
+        }
+    }
+
+    private static func key(_ s: PetState, _ frame: PetFrame) -> String {
+        "\(s.skin.rawValue)-\(s.mood)-\(s.sad)-\(s.escalation > 0)-\(frame.rawValue)"
+    }
+
+    /// Runs the 3D pet offscreen for a moment and keeps the last frame.
+    private static func render(_ base: PetState, _ frame: PetFrame) -> NSImage {
+        var state = base
+        state.look = .zero
+        state.pettedAt = .distantPast
+        state.ateAt = .distantPast
+        state.pokedAt = .distantPast
+        // A hop is at its highest about a third of a second in.
+        state.celebratedAt = frame == .hop ? Date().addingTimeInterval(-0.36) : .distantPast
+
+        let pet = PetScene()
+        pet.update(state)
+        let renderer = SCNRenderer(device: MTLCreateSystemDefaultDevice(), options: nil)
+        renderer.scene = pet.scene
+        renderer.pointOfView = pet.camera
+        renderer.delegate = pet
+
+        // Moments chosen to avoid the random idle antics (first 1.3s of every 7s); 20.6s lands mid-blink.
+        let target: TimeInterval = frame == .blink ? 20.6 : 20.0
+        var image = NSImage()
+        for step in 0..<24 { // let the smoothing settle
+            image = renderer.snapshot(atTime: target - Double(23 - step) / 30,
+                                      with: CGSize(width: 128, height: 128), antialiasingMode: .multisampling4X)
+        }
+        return image
+    }
+}
+
+/// The pet in the notch: a still picture that changes when its mood does (and blinks or hops now and then).
+struct StaticPetView: View {
+    @ObservedObject var model: NotchModel
+
+    var body: some View {
+        let state = model.petState
+        let cache = PetImageCache.shared
+        let onReady: @Sendable () -> Void = { [model] in MainActor.assumeIsolated { model.petImagesVersion += 1 } }
+        Group {
+            if let image = cache.image(for: state, frame: model.earFrame, ready: onReady)
+                ?? cache.image(for: state, frame: .normal, ready: onReady) {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                Color.clear
+            }
+        }
+        .id(model.petImagesVersion) // redraw once a missing picture has been rendered
+        .accessibilityLabel("Your pet")
+    }
+}
+
 // MARK: Snapshots (for checking the look without a screen)
 
 /// `NotchPet --render-pet <dir>` writes one PNG per mood (plus a wink and a petted frame), and exits.

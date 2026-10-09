@@ -53,8 +53,9 @@ Its name shows in the panel; change its color (peach, strawberry, matcha, taro, 
   Finished work is quiet: the pet hops and the badge counts it.
 - **Scroll on the notch** to flip through recent apps. After 5 min blocked the notch pulses; after 15, a phone push (if configured).
 - **Stays out of the way:** hidden over fullscreen apps (videos, slides, games) except for permission prompts; stays on
-  the notch display instead of following the cursor (`followCursorAcrossDisplays` to change); the 3D pet renders at
-  15fps in the notch, 8fps asleep, 30fps with the panel open, and not at all with the screen off or locked.
+  the notch display instead of following the cursor (`followCursorAcrossDisplays` to change). The pet in the notch is
+  a still picture of the 3D pet (rendered once per mood and color, then cached), which blinks and hops by swapping
+  pictures, so it costs nothing while it sits there. The live 3D pet only runs while the panel is open.
 
 `NotchPet --render-pet <dir>` renders the moods to PNG (handy when tweaking the look).
 

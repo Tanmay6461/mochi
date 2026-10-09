@@ -104,6 +104,12 @@ final class NotchController {
         timers.append(Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         })
+        timers.append(Timer.scheduledTimer(withTimeInterval: 4.3, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.blinkNow() }
+        })
+
+        // Render the notch pictures for the current color up front, so mood changes are instant.
+        PetImageCache.shared.prewarm(skin: store.pet.skin)
     }
 
     private func wireModel() {
@@ -116,7 +122,10 @@ final class NotchController {
             self?.model.pettedAt = Date()
             self?.store.petThePet()
         }
-        model.onSkin = { [weak self] skin in self?.store.setSkin(skin) }
+        model.onSkin = { [weak self] skin in
+            PetImageCache.shared.prewarm(skin: skin)
+            self?.store.setSkin(skin)
+        }
         model.onOpen = { [weak self] session in self?.open(session) }
         model.onRequestAccess = { WindowIndex.requestAccess() }
         model.onMarkAllSeen = { [weak self] in self?.store.markAllViewed() }
@@ -284,15 +293,29 @@ final class NotchController {
         updatePetActivity()
     }
 
-    /// The 3D pet is the main cost. Full speed only while the panel is open, slower while it sits
-    /// in the notch, slower still asleep, and not at all with the screen off or after 30 quiet minutes.
+    /// The notch shows a still picture of the pet (free). The live 3D pet only exists while the panel
+    /// or a permission prompt is open, and it stops rendering if the screen sleeps or locks meanwhile.
     private func updatePetActivity() {
-        let quietLong = Date().timeIntervalSince(model.lastActivity) > 30 * 60
-        let resting = model.mode == .resting
-        let paused = screensAsleep || (resting && quietLong && model.approvals.isEmpty)
-        let fps = resting ? (model.mood == .sleeping ? 8 : 15) : 30
-        if model.petPaused != paused { model.petPaused = paused }
-        if model.petFPS != fps { model.petFPS = fps }
+        if model.petPaused != screensAsleep { model.petPaused = screensAsleep }
+        if model.petFPS != 30 { model.petFPS = 30 }
+    }
+
+    /// Every few seconds the still pet in the notch blinks: two picture swaps, no rendering.
+    private func blinkNow() {
+        guard model.mode == .resting, !screensAsleep, model.earFrame == .normal,
+              [Mood.idle, .working, .needsYou].contains(model.mood) else { return }
+        model.earFrame = .blink
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+            if self?.model.earFrame == .blink { self?.model.earFrame = .normal }
+        }
+    }
+
+    /// Something finished: the still pet shows its hop picture for a moment.
+    private func hopNow() {
+        model.earFrame = .hop
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            if self?.model.earFrame == .hop { self?.model.earFrame = .normal }
+        }
     }
 
     // MARK: Mouse
@@ -444,6 +467,7 @@ final class NotchController {
         let finished = Set(store.attention.filter { $0.state == .done }.map { "\($0.id)@\($0.stateSince.timeIntervalSince1970)" })
         if let seen = seenFinished, !finished.subtracting(seen).isEmpty {
             model.celebratedAt = now
+            hopNow()
         }
         seenFinished = finished
 
