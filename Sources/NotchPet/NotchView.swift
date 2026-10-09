@@ -514,8 +514,6 @@ struct ChatView<Pet: View>: View {
                 }
             }
 
-            askField
-
             HStack(spacing: 12) {
                 if model.blockedToday >= 60 {
                     Label("Blocked on you \(Formatting.duration(model.blockedToday)) today", systemImage: "hourglass")

@@ -130,7 +130,7 @@ final class NotchController {
 
     /// ⌥⌘K: open the chat with the ask box focused, or close it.
     func toggleSearch() {
-        if model.mode == .chat { closeChat() } else { openChat(focusAsk: true) }
+        if model.mode == .chat { closeChat() } else { openChat() }
     }
 
     // MARK: Permission prompts

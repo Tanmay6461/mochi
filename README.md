@@ -40,15 +40,15 @@ A squishy 3D mochi (SceneKit) lives in the notch's left ear. Its face shows the 
 | needs you | big ● ● and an open mouth, bounces with a "!"; faster and bigger the longer you wait |
 | sleeping (nothing for 15 min) | ‿ ‿, floating z's |
 
-**It's a virtual pet:** it eats a treat (nom, hearts) each time you check on finished work, levels up as it's fed,
-gets happier when you rub it with the cursor (> < ω), jiggles when you click it, and gets sad if agents sit
-blocked on you for too long. Name, level and hearts show in its chat; change its color (peach, strawberry,
-matcha, taro, lemon, soda) from the ⋯ menu.
+**It's a virtual pet:** it munches a treat each time you check on finished work, gets happier when you rub it
+with the cursor (> < ω), jiggles when you click it, and gets sad if agents sit blocked on you for too long.
+Its name shows in the panel; change its color (peach, strawberry, matcha, taro, lemon, soda) from the ⋯ menu.
 
 - **At a glance**: a pulsing green dot in the right ear (with a count) whenever something is running; a count badge when something needs you.
 - **Click the notch** (anywhere on it) to open the panel; click it again, press Esc, or click elsewhere to close.
-  Nothing opens on hover. The panel has *What needs me?* · *Where did I leave off?* (instant, up to 3 cards),
-  what's running now (in green, with how long), and an ask box (answered by Claude Haiku from your sessions).
+  Nothing opens on hover. The panel has two cards, **ChatGPT** (chats + Codex) and **Claude** (Claude Desktop chats +
+  Claude Code sessions), filtered by *What needs me?* · *Where did I leave off?*; 4 rows each, then *See more*.
+  Click a row to open that exact chat or session. What's running now is listed in green, with how long.
 - **Only permission prompts drop down on their own** (Allow / Always / Deny), since an agent is blocked until you answer.
   Finished work is quiet: the pet hops and the badge counts it.
 - **Scroll on the notch** to flip through recent apps. After 5 min blocked the notch pulses; after 15, a phone push (if configured).
@@ -58,7 +58,7 @@ matcha, taro, lemon, soda) from the ⋯ menu.
 ## Hotkeys
 
 - **⌥⌘J**: jump to the session that has waited on you longest
-- **⌥⌘K**: open the pet's chat with the ask box focused (Esc closes)
+- **⌥⌘K**: open or close the panel
 
 ## Long jobs
 
