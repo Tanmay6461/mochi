@@ -1,0 +1,31 @@
+#!/bin/bash
+# Runs any long command and shows it in the notch: working while it runs, done/failed when it exits.
+# Usage: notch-run npm run build
+#        notch-run -n "nightly train" python train.py
+
+name=""
+if [ "${1:-}" = "-n" ]; then name="$2"; shift 2; fi
+[ $# -gt 0 ] || { echo "usage: notch-run [-n name] <command...>" >&2; exit 2; }
+
+SOCK="${NOTCHPET_SOCKET:-$HOME/Library/Application Support/NotchPet/notch.sock}"
+id="job-$(uuidgen | tr 'A-Z' 'a-z')"
+label="${name:-$*}"
+tty=$(tty 2>/dev/null); case "$tty" in /dev/*) ;; *) tty="" ;; esac
+
+send() { # event, extra-json
+  [ -S "$SOCK" ] || return 0
+  jq -nc --arg e "$1" --arg id "$id" --arg cwd "$PWD" --arg label "$label" \
+    --arg program "${TERM_PROGRAM:-}" --arg iterm "${ITERM_SESSION_ID:-}" --arg term "${TERM_SESSION_ID:-}" --arg tty "$tty" \
+    --argjson extra "$2" \
+    '{hook_event_name: $e, session_id: $id, cwd: $cwd, source: "job", message: $label,
+      notch_terminal: {program: $program, iterm_session_id: $iterm, term_session_id: $term, tty: $tty}} + $extra' |
+    curl -s -o /dev/null --max-time 0.5 --unix-socket "$SOCK" -H 'Content-Type: application/json' \
+      --data-binary @- http://localhost/event >/dev/null 2>&1
+}
+
+send JobStart '{}'
+start=$(date +%s)
+"$@"
+code=$?
+send JobEnd "$(jq -nc --argjson code $code --argjson secs $(( $(date +%s) - start )) '{exit_code: $code, duration_seconds: $secs}')"
+exit $code
