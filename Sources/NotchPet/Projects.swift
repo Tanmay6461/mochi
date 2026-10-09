@@ -1,57 +1,10 @@
 import AppKit
 
-/// Something a project row can bring to the front: an app window or a browser tab.
-enum ProjectTarget: Identifiable {
-    case window(WindowRef)
-    case tab(BrowserTab)
-
-    var id: String {
-        switch self {
-        case .window(let w): "w-\(w.id)"
-        case .tab(let t): "t-\(t.id)"
-        }
-    }
-
-    var appName: String {
-        switch self {
-        case .window(let w): w.appName
-        case .tab(let t): t.appName
-        }
-    }
-
-    var title: String {
-        switch self {
-        case .window(let w): w.title
-        case .tab(let t): t.title
-        }
-    }
-
-    var icon: NSImage? {
-        switch self {
-        case .window(let w):
-            return NSRunningApplication(processIdentifier: w.pid)?.icon
-        case .tab(let t):
-            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: t.bundleID) else { return nil }
-            return NSWorkspace.shared.icon(forFile: url.path)
-        }
-    }
-
-    func bringForward() {
-        switch self {
-        case .window(let w): WindowIndex.raise(w)
-        case .tab(let t): BrowserTabs.focus(t)
-        }
-    }
-}
-
-/// Everything that belongs to one folder: its agent sessions, the app windows and browser
-/// tabs showing it, and links you've pinned to it. The panel shows just two of these: "ChatGPT"
-/// (ChatGPT chats and Codex, which share an app) and "Claude" (Claude Desktop chats and Claude Code).
+/// One card in the panel: "ChatGPT" (ChatGPT chats and Codex, which share an app) or "Claude"
+/// (Claude Desktop chats and Claude Code sessions), with the links you've pinned to it.
 struct Project: Identifiable {
     let path: String          // "/ChatGPT" or "/Claude"
     let sessions: [Session]   // most urgent first
-    let windows: [WindowRef]
-    let tabs: [BrowserTab]
     let links: [SavedLink]
 
     var id: String { path }
@@ -67,28 +20,17 @@ struct Project: Identifiable {
         }
     }
 
-    /// One icon per app window, then matching browser tabs.
-    var targets: [ProjectTarget] {
-        var seen = Set<pid_t>()
-        let windowTargets = windows.compactMap { w in seen.insert(w.pid).inserted ? ProjectTarget.window(w) : nil }
-        return Array((windowTargets + tabs.prefix(2).map(ProjectTarget.tab)).prefix(5))
-    }
-
-    static func build(from sessions: [Session], windows: [WindowRef], tabs: [BrowserTab],
-                      links: [SavedLink], limit: Int) -> [Project] {
+    static func build(from sessions: [Session], links: [SavedLink]) -> [Project] {
         let grouped = Dictionary(grouping: sessions, by: groupKey(for:))
         let projects = grouped.map { path, group in
             Project(
                 path: path,
                 sessions: group.sorted { (urgency($0), $1.lastActivity) < (urgency($1), $0.lastActivity) },
-                // Each row opens its own session or chat, so no window grouping at the card level.
-                windows: [],
-                tabs: [],
                 links: links.filter { $0.projectPath == path }
             )
         }
         // Always the same order, so the panel looks the same every time: ChatGPT, then Claude.
-        return Array(projects.sorted { $0.path == "/ChatGPT" && $1.path != "/ChatGPT" }.prefix(limit))
+        return projects.sorted { $0.path == "/ChatGPT" && $1.path != "/ChatGPT" }
     }
 
     /// Lower is more urgent: blocked on you, then finished-unseen, then working, then the rest.

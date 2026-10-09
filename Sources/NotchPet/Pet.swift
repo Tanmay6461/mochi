@@ -59,11 +59,13 @@ struct PetState {
 struct PetView: View {
     let state: PetState
     var detailed = true   // emotes (z, !, sparkles, hearts) only when there's room
+    var fps = 30          // lower while it sits in the notch, to save battery
+    var paused = false    // screen off or locked: stop rendering entirely
 
     var body: some View {
         ZStack {
-            PetSceneView(state: state)
-            if detailed { PetEmotes(state: state).allowsHitTesting(false) }
+            PetSceneView(state: state, fps: fps, paused: paused)
+            if detailed && !paused { PetEmotes(state: state).allowsHitTesting(false) }
         }
         .contentShape(Rectangle())
         .accessibilityLabel("Your pet")
@@ -74,6 +76,8 @@ struct PetView: View {
 
 private struct PetSceneView: NSViewRepresentable {
     let state: PetState
+    let fps: Int
+    let paused: Bool
 
     func makeCoordinator() -> PetScene { PetScene() }
 
@@ -85,16 +89,21 @@ private struct PetSceneView: NSViewRepresentable {
         view.wantsLayer = true
         view.layer?.isOpaque = false
         view.antialiasingMode = .multisampling4X
-        view.preferredFramesPerSecond = 30
-        view.rendersContinuously = true
-        view.isPlaying = true
         view.delegate = context.coordinator
+        apply(to: view)
         context.coordinator.update(state)
         return view
     }
 
     func updateNSView(_ view: SCNView, context: Context) {
+        apply(to: view)
         context.coordinator.update(state)
+    }
+
+    private func apply(to view: SCNView) {
+        if view.preferredFramesPerSecond != fps { view.preferredFramesPerSecond = fps }
+        if view.rendersContinuously == paused { view.rendersContinuously = !paused }
+        if view.isPlaying == paused { view.isPlaying = !paused }
     }
 }
 

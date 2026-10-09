@@ -98,7 +98,9 @@ final class DesktopChatWatcher: @unchecked Sendable {
         AXUIElementSetMessagingTimeout(axApp, 0.3)
         AXUIElementSetAttributeValue(axApp, "AXManualAccessibility" as CFString, kCFBooleanTrue)
         if firstTime {
-            AXUIElementSetAttributeValue(axApp, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+            // Earlier builds turned AXEnhancedUserInterface on, which can disturb window animations and
+            // positioning in the app. It isn't needed (AXManualAccessibility is enough), so turn it back off.
+            AXUIElementSetAttributeValue(axApp, "AXEnhancedUserInterface" as CFString, kCFBooleanFalse)
         }
         return axApp
     }

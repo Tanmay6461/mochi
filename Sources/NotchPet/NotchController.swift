@@ -15,13 +15,11 @@ final class NotchController {
     private let panel: NotchPanel
     private let appTracker = AppTracker()
     private var screen: NSScreen?
-
-    private var windows: [WindowRef] = []
-    private var tabs: [BrowserTab] = []
-    private let windowQueue = DispatchQueue(label: "notchpet.windows", qos: .userInitiated)
+    private var screensAsleep = false  // display asleep or screen locked: the pet stops rendering
 
     private var timers: [Timer] = []
     private var clickMonitor: Any?
+    private var escMonitor: Any?
     private var hoverStartedAt: Date?
     private var hovering = false
     private var lastInsideAt = Date.distantPast
@@ -44,12 +42,12 @@ final class NotchController {
         panel = NotchPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isFloatingPanel = true
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 3) // above the menu bar
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+        panel.collectionBehavior = Self.normalSpaces // stays out of fullscreen apps (see updateFullscreenPresence)
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = false
         panel.isMovable = false
-        panel.becomesKeyOnlyIfNeeded = true // only takes keyboard focus for the ask box
+        panel.becomesKeyOnlyIfNeeded = true
 
         let host = FirstClickHostingView(rootView: NotchView(model: model))
         host.sizingOptions = [] // we size the panel ourselves; don't let SwiftUI move it
@@ -65,15 +63,37 @@ final class NotchController {
             MainActor.assumeIsolated { self?.layout() }
         }
 
-        // Clicking anywhere else closes the chat.
+        // Clicking anywhere else closes the panel.
         clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.model.mode == .chat else { return }
                 if !self.visibleRect.contains(NSEvent.mouseLocation) { self.closeChat() }
             }
         }
+        // So does Esc, wherever your keyboard is (the panel never takes keyboard focus).
+        escMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53 else { return } // Esc
+            MainActor.assumeIsolated {
+                guard let self, self.model.mode == .chat else { return }
+                self.closeChat(restoreFocus: false)
+            }
+        }
 
-        screen = NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main
+        // Stop rendering the pet while the display sleeps or the screen is locked.
+        let workspace = NSWorkspace.shared.notificationCenter
+        for (name, asleep) in [(NSWorkspace.screensDidSleepNotification, true), (NSWorkspace.screensDidWakeNotification, false),
+                               (NSWorkspace.sessionDidResignActiveNotification, true), (NSWorkspace.sessionDidBecomeActiveNotification, false)] {
+            workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.setScreensAsleep(asleep) }
+            }
+        }
+        for (name, asleep) in [("com.apple.screenIsLocked", true), ("com.apple.screenIsUnlocked", false)] {
+            DistributedNotificationCenter.default().addObserver(forName: Notification.Name(name), object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.setScreensAsleep(asleep) }
+            }
+        }
+
+        screen = homeScreen
         sync()
         layout()
         panel.orderFrontRegardless()
@@ -98,16 +118,10 @@ final class NotchController {
         }
         model.onSkin = { [weak self] skin in self?.store.setSkin(skin) }
         model.onOpen = { [weak self] session in self?.open(session) }
-        model.onOpenProject = { [weak self] project in self?.open(project) }
-        model.onTarget = { [weak self] target in
-            self?.closeChat(restoreFocus: false)
-            target.bringForward()
-        }
         model.onRequestAccess = { WindowIndex.requestAccess() }
         model.onMarkAllSeen = { [weak self] in self?.store.markAllViewed() }
         model.onMarkSeen = { [weak self] id in self?.store.markViewed(id) }
         model.onDecide = { [weak self] id, decision in self?.store.decide(id, decision) }
-        model.onAsk = { [weak self] question in self?.ask(question) }
         model.onEscape = { [weak self] in self?.closeChat() }
         model.search = { [weak self] query in self?.store.search(query) ?? [] }
         model.onDrop = { [weak self] urls, projectPath in
@@ -122,15 +136,15 @@ final class NotchController {
 
     // MARK: Public actions (hotkeys)
 
-    /// ⌥⌘J: go to the session that has waited on you the longest.
+    /// Jump hotkey (default ⌃⌥J): go to the session that has waited on you the longest.
     func jumpToOldestWaiting() {
         guard let session = store.attention.first ?? store.recent.first else { return }
         open(session)
     }
 
-    /// ⌥⌘K: open the chat with the ask box focused, or close it.
+    /// Open hotkey (default ⌃⌥Space): open or close the panel.
     func toggleSearch() {
-        if model.mode == .chat { closeChat() } else { openChat() }
+        togglePanel()
     }
 
     // MARK: Permission prompts
@@ -198,9 +212,18 @@ final class NotchController {
         topCenteredRect(width: contentSize.width, height: contentSize.height)
     }
 
+    static let normalSpaces: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+
+    /// The display the pet lives on: the one with a notch, else the main display.
+    private var homeScreen: NSScreen? {
+        NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main
+    }
+
     private func layout() {
-        if screen == nil || !NSScreen.screens.contains(where: { $0 == screen }) {
-            screen = NSScreen.main
+        if !config.followCursorAcrossDisplays {
+            screen = homeScreen
+        } else if screen == nil || !NSScreen.screens.contains(where: { $0 == screen }) {
+            screen = homeScreen
         }
         guard let screen else { return }
         let notch = measureNotch(on: screen)
@@ -241,6 +264,35 @@ final class NotchController {
         if mode != .resting { panel.setFrame(bigRect, display: true) } // room for the opening animation
         withAnimation(.spring(response: 0.42, dampingFraction: 0.78)) { model.mode = mode }
         fitSoon()
+        updatePetActivity()
+    }
+
+    // MARK: Fullscreen and battery
+
+    /// Fullscreen apps (videos, slides, games) don't get the notch drawn over them. The one
+    /// exception is a permission prompt: an agent is blocked until you answer, so it still shows.
+    private func updateFullscreenPresence() {
+        let behavior = model.approvals.isEmpty ? Self.normalSpaces : Self.normalSpaces.union(.fullScreenAuxiliary)
+        if panel.collectionBehavior != behavior {
+            panel.collectionBehavior = behavior
+            panel.orderFrontRegardless()
+        }
+    }
+
+    private func setScreensAsleep(_ asleep: Bool) {
+        screensAsleep = asleep
+        updatePetActivity()
+    }
+
+    /// The 3D pet is the main cost. Full speed only while the panel is open, slower while it sits
+    /// in the notch, slower still asleep, and not at all with the screen off or after 30 quiet minutes.
+    private func updatePetActivity() {
+        let quietLong = Date().timeIntervalSince(model.lastActivity) > 30 * 60
+        let resting = model.mode == .resting
+        let paused = screensAsleep || (resting && quietLong && model.approvals.isEmpty)
+        let fps = resting ? (model.mood == .sleeping ? 8 : 15) : 30
+        if model.petPaused != paused { model.petPaused = paused }
+        if model.petFPS != fps { model.petFPS = fps }
     }
 
     // MARK: Mouse
@@ -249,8 +301,9 @@ final class NotchController {
         let mouse = NSEvent.mouseLocation
         let now = Date()
 
-        // Follow the cursor to whichever display it's on.
-        if model.mode == .resting,
+        // Optionally follow the cursor to whichever display it's on (off by default: a pet that
+        // jumps screens every time you move across is distracting).
+        if config.followCursorAcrossDisplays, model.mode == .resting,
            let here = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }), here != screen {
             screen = here
             layout()
@@ -306,30 +359,20 @@ final class NotchController {
         if model.mode == .chat { closeChat() } else { openChat() }
     }
 
-    /// Opens the panel. A click leaves your keyboard where it was; the ⌥⌘K shortcut puts it in the ask box.
-    private func openChat(focusAsk: Bool = false) {
-        model.answer = nil
-        model.query = ""
+    /// Opens the panel, leaving your keyboard where it was.
+    private func openChat() {
         if model.mode != .chat {
             model.topic = store.attention.isEmpty ? .leftOff : .needsYou
             model.showAll = false // always open with the short list
         }
         sync()
-        refreshWindows()
         lastInsideAt = Date()
         setMode(.chat)
-        if focusAsk {
-            panel.makeKey()
-            model.focusToken += 1
-        }
     }
 
     private func closeChat(restoreFocus: Bool = true) {
         guard model.mode == .chat else { return }
         let wasKey = panel.isKeyWindow
-        model.query = ""
-        model.answer = nil
-        model.isAsking = false
         hovering = false
         setMode(.resting)
         if wasKey {
@@ -384,8 +427,7 @@ final class NotchController {
         model.attention = store.attention
         model.working = store.working
         model.approvals = store.approvals
-        model.projects = Project.build(from: Array(store.sessions.values), windows: windows, tabs: tabs,
-                                       links: store.links, limit: 40)
+        model.projects = Project.build(from: Array(store.sessions.values), links: store.links)
         let projectPaths = Set(model.projects.map(\.path))
         model.looseLinks = store.links.filter { $0.projectPath.map { !projectPaths.contains($0) } ?? true }
         model.apps = appTracker.apps.prefix(10).map {
@@ -417,6 +459,8 @@ final class NotchController {
         }
 
         updatePeek()
+        updateFullscreenPresence()
+        updatePetActivity()
     }
 
     private func tick() {
@@ -433,82 +477,15 @@ final class NotchController {
         }
     }
 
-    /// Re-reads window titles and browser tabs in the background, then regroups projects.
-    private func refreshWindows() {
-        let apps = appTracker.apps.map { (pid: $0.processIdentifier, name: $0.localizedName ?? "App") }
-        let bundleIDs = Set(appTracker.apps.compactMap(\.bundleIdentifier))
-        let includeTabs = config.browserTabs
-        windowQueue.async { [weak self] in
-            let found = WindowIndex.snapshot(of: apps)
-            let foundTabs = includeTabs ? BrowserTabs.snapshot(running: bundleIDs) : []
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    self?.windows = found
-                    self?.tabs = foundTabs
-                    self?.sync()
-                }
-            }
-        }
-    }
-
     private func open(_ session: Session) {
         store.markViewed(session.id)
         closeChat(restoreFocus: false)
         TerminalJumper.jump(to: session)
     }
-
-    /// Brings back a whole project: editor windows and tabs first, then the session's terminal on top.
-    private func open(_ project: Project) {
-        store.markViewed(project.lead.id)
-        closeChat(restoreFocus: false)
-        for window in project.windows.reversed() where !isTerminal(window) {
-            WindowIndex.raise(window)
-        }
-        if let tab = project.tabs.first { BrowserTabs.focus(tab) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            TerminalJumper.jump(to: project.lead)
-        }
-    }
-
-    private func isTerminal(_ window: WindowRef) -> Bool {
-        ["Terminal", "iTerm2", "Ghostty", "Warp", "kitty", "WezTerm", "Alacritty"].contains(window.appName)
-    }
-
-    // MARK: Ask
-
-    private func ask(_ question: String) {
-        let q = question.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty, !model.isAsking else { return }
-        model.isAsking = true
-        model.answer = nil
-
-        let context = store.sessions.values
-            .sorted { $0.lastActivity > $1.lastActivity }
-            .prefix(25)
-            .map { s in
-                var line = "- \(s.folderName) [\(s.kind.rawValue), \(s.state.label), \(Formatting.ago(s.lastActivity)) ago]"
-                if let t = s.title { line += " title: \(t)." }
-                if let l = s.leftOff { line += " left off: \(l)" }
-                if let n = s.nextStep { line += " next: \(n)" }
-                if let m = s.lastMessage { line += " last message: \(Formatting.oneLine(m, max: 200))" }
-                return line
-            }
-            .joined(separator: "\n")
-
-        summarizer.ask(q, context: context) { [weak self] answer in
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    guard let self, self.model.mode == .chat else { return }
-                    self.model.isAsking = false
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { self.model.answer = answer }
-                }
-            }
-        }
-    }
 }
 
 final class NotchPanel: NSPanel {
-    override var canBecomeKey: Bool { true }   // for the ask box; nonactivating, so your app stays active
+    override var canBecomeKey: Bool { true }   // nonactivating, so your app stays active
     override var canBecomeMain: Bool { false }
 }
 

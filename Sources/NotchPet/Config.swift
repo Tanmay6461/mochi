@@ -16,12 +16,15 @@ struct Config: Codable {
     /// falling back to the normal terminal prompt.
     var approvalsFromNotch: Bool = true
     var approvalWaitSeconds: Double = 120
-    /// Look inside browsers (Safari, Chrome, Arc, Brave) for tabs that belong to a project.
-    var browserTabs: Bool = true
     /// Keep the old menu bar icon as well as the notch.
-    var menuBarIcon: Bool = true
+    var menuBarIcon: Bool = false
     /// Watch Claude Desktop and ChatGPT chat windows (via Accessibility) for replies being written.
     var desktopChats: Bool = true
+    /// Move the pet to whichever display the cursor is on. Off: it stays on the notch display.
+    var followCursorAcrossDisplays: Bool = false
+    /// Global shortcuts, like "ctrl+option+space". Empty string turns one off.
+    var hotkeyOpen: String = "ctrl+option+space"
+    var hotkeyJump: String = "ctrl+option+j"
 
     static func load() -> Config {
         let url = Paths.supportDir.appendingPathComponent("config.json")
@@ -53,8 +56,10 @@ struct Config: Codable {
         summaryModel = try c.decodeIfPresent(String.self, forKey: .summaryModel) ?? d.summaryModel
         approvalsFromNotch = try c.decodeIfPresent(Bool.self, forKey: .approvalsFromNotch) ?? d.approvalsFromNotch
         approvalWaitSeconds = try c.decodeIfPresent(Double.self, forKey: .approvalWaitSeconds) ?? d.approvalWaitSeconds
-        browserTabs = try c.decodeIfPresent(Bool.self, forKey: .browserTabs) ?? d.browserTabs
         menuBarIcon = try c.decodeIfPresent(Bool.self, forKey: .menuBarIcon) ?? d.menuBarIcon
         desktopChats = try c.decodeIfPresent(Bool.self, forKey: .desktopChats) ?? d.desktopChats
+        followCursorAcrossDisplays = try c.decodeIfPresent(Bool.self, forKey: .followCursorAcrossDisplays) ?? d.followCursorAcrossDisplays
+        hotkeyOpen = try c.decodeIfPresent(String.self, forKey: .hotkeyOpen) ?? d.hotkeyOpen
+        hotkeyJump = try c.decodeIfPresent(String.self, forKey: .hotkeyJump) ?? d.hotkeyJump
     }
 }

@@ -36,10 +36,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("NotchPet: could not start socket server: \(error)")
         }
 
-        hotKeys = [
-            HotKey(keyCode: kVK_ANSI_J, modifiers: cmdKey | optionKey) { [weak notch] in notch?.jumpToOldestWaiting() },
-            HotKey(keyCode: kVK_ANSI_K, modifiers: cmdKey | optionKey) { [weak notch] in notch?.toggleSearch() },
-        ]
+        // Shortcuts from config.json (defaults ⌃⌥Space / ⌃⌥J, which don't collide with common apps
+        // the way ⌥⌘J did with Chrome's JavaScript Console). An empty string turns one off.
+        if let open = HotKey.parse(config.hotkeyOpen) {
+            hotKeys.append(HotKey(keyCode: open.keyCode, modifiers: open.modifiers) { [weak notch] in notch?.toggleSearch() })
+        }
+        if let jump = HotKey.parse(config.hotkeyJump) {
+            hotKeys.append(HotKey(keyCode: jump.keyCode, modifiers: jump.modifiers) { [weak notch] in notch?.jumpToOldestWaiting() })
+        }
 
         store.onSessionSettled = { [weak self] session in self?.scheduleSummary(session.id) }
 

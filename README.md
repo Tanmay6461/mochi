@@ -52,13 +52,18 @@ Its name shows in the panel; change its color (peach, strawberry, matcha, taro, 
 - **Only permission prompts drop down on their own** (Allow / Always / Deny), since an agent is blocked until you answer.
   Finished work is quiet: the pet hops and the badge counts it.
 - **Scroll on the notch** to flip through recent apps. After 5 min blocked the notch pulses; after 15, a phone push (if configured).
+- **Stays out of the way:** hidden over fullscreen apps (videos, slides, games) except for permission prompts; stays on
+  the notch display instead of following the cursor (`followCursorAcrossDisplays` to change); the 3D pet renders at
+  15fps in the notch, 8fps asleep, 30fps with the panel open, and not at all with the screen off or locked.
 
 `NotchPet --render-pet <dir>` renders the moods to PNG (handy when tweaking the look).
 
 ## Hotkeys
 
-- **⌥⌘J**: jump to the session that has waited on you longest
-- **⌥⌘K**: open or close the panel
+- **⌃⌥Space**: open or close the panel
+- **⌃⌥J**: jump to the session that has waited on you longest
+
+Change them in `config.json` (`hotkeyOpen`, `hotkeyJump`, e.g. `"cmd+shift+m"`), or set `""` to turn one off.
 
 ## Long jobs
 
@@ -77,8 +82,10 @@ Shows as working in the notch, then ✓/✗ with the duration when it exits.
 | `escalateAfterMinutes` / `pushAfterMinutes` | 5 / 15 | |
 | `summaries`, `summaryModel` | true, haiku | runs `claude -p` with your login, ~$0.001 each, not saved to history |
 | `approvalsFromNotch`, `approvalWaitSeconds` | true, 120 | |
-| `browserTabs` | true | read Safari/Chrome/Arc/Brave/Edge tabs to match projects |
-| `menuBarIcon` | true | the old menu bar fallback |
+| `desktopChats` | true | watch Claude Desktop / ChatGPT chats via Accessibility |
+| `hotkeyOpen`, `hotkeyJump` | ctrl+option+space, ctrl+option+j | `""` turns one off |
+| `followCursorAcrossDisplays` | false | move the pet to whichever display the cursor is on |
+| `menuBarIcon` | false | the old menu bar fallback |
 
 ## How it works
 
@@ -87,7 +94,6 @@ Shows as working in the notch, then ✓/✗ with the duration when it exits.
 - Hooks ignore NotchPet's own `claude -p` calls via `NOTCHPET_INTERNAL=1`.
 - Older sessions are found in `~/.claude/projects/*/*.jsonl` (last 14 days). That format is internal to
   Claude Code, so the reader is best-effort.
-- Windows match a project when the folder name appears in their title; tabs when it's in the title or URL.
 - `NOTCHPET_HOME` / `NOTCHPET_SOCKET` override the data folder and socket (handy for tests; socket path < 104 bytes).
 - Ad-hoc signing means macOS may forget the Accessibility grant after a rebuild; toggle it off/on in
   System Settings → Privacy & Security → Accessibility.
@@ -96,5 +102,5 @@ Shows as working in the notch, then ✓/✗ with the duration when it exits.
 
 `Pet` (3D creature) · `AppDelegate` (wiring, hotkeys, summaries) · `SessionStore` (state machine, approvals, links, stats) ·
 `SocketServer` · `NotchController` (panel, hover, scroll, escalation) · `NotchView` (all UI) ·
-`Projects` · `WindowIndex` · `BrowserTabs` · `TerminalJumper` · `Summarizer` (claude -p, transcript reader, indexer) ·
+`Projects` (the two cards) · `DesktopChatWatcher` · `WindowIndex` · `TerminalJumper` · `Summarizer` (claude -p, transcript reader, indexer) ·
 `PushNotifier` · `HotKey` · `Config` · `StatusController` (menu bar fallback)

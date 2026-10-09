@@ -3,13 +3,13 @@ import UniformTypeIdentifiers
 
 enum NotchMode: Equatable {
     case resting   // just the notch, pet in the left ear
-    case peek      // pet drops out with one speech bubble
-    case chat      // you clicked the pet: quick questions, up to 3 cards, ask box
+    case peek      // a permission prompt drops down on its own
+    case chat      // you clicked the notch: the ChatGPT and Claude cards
     case switcher  // scrolling on the notch to switch apps
 }
 
 enum ChatTopic: Equatable {
-    case needsYou, finished, leftOff
+    case needsYou, leftOff
     case search(String)
 }
 
@@ -50,10 +50,8 @@ final class NotchModel: ObservableObject {
 
     @Published var topic: ChatTopic = .needsYou { didSet { if topic != oldValue { showAll = false } } }
     @Published var showAll = false   // "See more" expanded
-    @Published var query = ""
-    @Published var answer: String?
-    @Published var isAsking = false
-    @Published var focusToken = 0
+    @Published var petFPS = 15       // the 3D pet's frame rate: lower in the notch, full in the panel
+    @Published var petPaused = false // screen off, locked, or nothing for a long while
 
     var onContentSize: ((CGSize) -> Void)?
     var onPet: (() -> Void)?
@@ -82,13 +80,10 @@ final class NotchModel: ObservableObject {
     }
     var onPetTap: (() -> Void)?
     var onOpen: ((Session) -> Void)?
-    var onOpenProject: ((Project) -> Void)?
-    var onTarget: ((ProjectTarget) -> Void)?
     var onRequestAccess: (() -> Void)?
     var onMarkAllSeen: (() -> Void)?
     var onMarkSeen: ((String) -> Void)?
     var onDecide: ((UUID, ApprovalDecision) -> Void)?
-    var onAsk: ((String) -> Void)?
     var onEscape: (() -> Void)?
     var search: ((String) -> [Session])?
     var onDrop: (([URL], String?) -> Void)?
@@ -126,10 +121,6 @@ final class NotchModel: ObservableObject {
         switch topic {
         case .needsYou:
             return project.sessions.filter(\.needsYou) // most urgent first
-        case .finished:
-            return project.sessions
-                .filter { $0.state == .done && now.timeIntervalSince($0.stateSince) < 86400 }
-                .sorted { $0.stateSince > $1.stateSince }
         case .leftOff:
             return project.sessions
                 .filter { $0.state != .working }
@@ -218,7 +209,7 @@ struct NotchView: View {
     }
 
     private func pet(detailed: Bool) -> PetView {
-        PetView(state: model.petState, detailed: detailed)
+        PetView(state: model.petState, detailed: detailed, fps: model.petFPS, paused: model.petPaused)
     }
 }
 
@@ -286,7 +277,7 @@ struct PeekView<Pet: View>: View {
                 .onContinuousHover { phase in
                     if case .active(let p) = phase { model.rub(at: p) }
                 }
-                .help("Click to chat · rub to pet")
+                .help("Click to open · rub to pet")
             SpeechBubble { content }
         }
         .padding(.horizontal, 12)
@@ -294,21 +285,13 @@ struct PeekView<Pet: View>: View {
         .padding(.bottom, 12)
     }
 
+    /// Only shown for permission prompts.
     @ViewBuilder
     private var content: some View {
-        let others = max(0, max(model.attention.count, model.approvals.count) - 1)
+        let others = max(0, model.approvals.count - 1)
         VStack(alignment: .leading, spacing: 8) {
             if let approval = model.approvals.first {
                 ApprovalContent(model: model, approval: approval)
-            } else if let session = model.attention.first {
-                SessionLine(model: model, session: session)
-            } else if !model.working.isEmpty {
-                RunningList(model: model, title: "Running")
-            } else {
-                PetSays(text: model.mood == .sleeping ? "Zzz… nothing's running. Click me if you need something." : "All quiet. Nothing needs you right now.")
-            }
-            if !model.working.isEmpty && (model.approvals.first != nil || model.attention.first != nil) {
-                RunningList(model: model, title: "Also running")
             }
             if others > 0 {
                 Button { model.topic = .needsYou; model.onPetTap?() } label: {
@@ -357,39 +340,6 @@ struct PetSays: View {
             .font(.system(size: 13))
             .foregroundStyle(.white.opacity(0.92))
             .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-struct SessionLine: View {
-    @ObservedObject var model: NotchModel
-    let session: Session
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Group {
-                switch session.state {
-                case .done:
-                    Text("**\(session.folderName)** is done") + Text(detail.map { ": \($0)" } ?? ".")
-                case .needsInput:
-                    Text("**\(session.folderName)** has a question for you") + Text(detail.map { ": \($0)" } ?? ".")
-                default:
-                    Text("**\(session.folderName)** needs you.")
-                }
-            }
-            .font(.system(size: 13))
-            .foregroundStyle(.white.opacity(0.92))
-            .lineLimit(3)
-            .fixedSize(horizontal: false, vertical: true)
-
-            HStack(spacing: 6) {
-                PillButton(title: "Take me there", style: .primary) { model.onOpen?(session) }
-                PillButton(title: "Later", style: .quiet) { model.onMarkSeen?(session.id) }
-            }
-        }
-    }
-
-    private var detail: String? {
-        (session.title ?? session.lastMessage).map { Formatting.oneLine($0, max: 90) }
     }
 }
 
@@ -453,12 +403,11 @@ struct PillButton: View {
     }
 }
 
-// MARK: Chat: ask the pet
+// MARK: The panel
 
 struct ChatView<Pet: View>: View {
     @ObservedObject var model: NotchModel
     let pet: Pet
-    @FocusState private var focused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -471,16 +420,7 @@ struct ChatView<Pet: View>: View {
                         .help("Rub to pet")
                     PetStatsLine(stats: model.petStats)
                 }
-                SpeechBubble {
-                    if model.isAsking {
-                        HStack(spacing: 8) {
-                            ProgressView().controlSize(.small)
-                            PetSays(text: "Thinking…")
-                        }
-                    } else {
-                        PetSays(text: model.answer ?? headline)
-                    }
-                }
+                SpeechBubble { PetSays(text: headline) }
             }
 
             HStack(spacing: 6) {
@@ -546,7 +486,6 @@ struct ChatView<Pet: View>: View {
         .padding(.horizontal, 14)
         .padding(.top, 4)
         .padding(.bottom, 12)
-        .onChange(of: model.focusToken) { focused = true }
     }
 
     private var headline: String {
@@ -554,8 +493,6 @@ struct ChatView<Pet: View>: View {
         switch model.topic {
         case .needsYou:
             return count == 0 ? "Nothing needs you right now. Nice." : count == 1 ? "This one needs you:" : "These \(count) need you:"
-        case .finished:
-            return count == 0 ? "Nothing finished in the last day." : "Finished recently:"
         case .leftOff:
             return count == 0 ? "No past sessions yet." : "Here's where you left off:"
         case .search(let q):
@@ -566,29 +503,7 @@ struct ChatView<Pet: View>: View {
     private func select(_ topic: ChatTopic) {
         withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
             model.topic = topic
-            model.answer = nil
         }
-    }
-
-    private var askField: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "sparkle").font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
-            TextField("Ask me anything about your agents…", text: $model.query)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .foregroundStyle(.white)
-                .focused($focused)
-                .onSubmit {
-                    let q = model.query.trimmingCharacters(in: .whitespaces)
-                    guard !q.isEmpty else { return }
-                    model.topic = .search(q)
-                    model.onAsk?(q)
-                }
-                .onExitCommand { model.onEscape?() }
-        }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.08)))
     }
 }
 
@@ -836,7 +751,7 @@ struct RunningDot: View {
     let count: Int
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 20)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 10)) { context in // a slow glow doesn't need more
             let pulse = 0.5 + 0.5 * abs(sin(context.date.timeIntervalSinceReferenceDate * 2.4))
             HStack(spacing: 3) {
                 Circle()
